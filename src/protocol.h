@@ -8,6 +8,7 @@
 
 #include <kernel/messagestartchars.h> // IWYU pragma: export
 #include <netaddress.h>
+#include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <serialize.h>
 #include <streams.h>
@@ -264,6 +265,29 @@ inline constexpr const char* WTXIDRELAY{"wtxidrelay"};
  * txreconciliation, as described by BIP 330.
  */
 inline constexpr const char* SENDTXRCNCL{"sendtxrcncl"};
+
+/**
+* The following message types are not part of the Bitcoin protocol, but are
+* used by wallets for fast and secure loading of wallet data using the addrindex.
+*/
+/**
+* Sends a random 8-byte challenge to the peer to be used for DoS protection.
+* A peer should not assume that the node supports address indexes until it
+* receives this message from the node.
+*/
+inline constexpr const char* SENDCHALLENGE{"challenge"};
+/**
+* A DoS-protected request for the peer to send the relevant transactions.
+* Protection is based on PoW. The number of transactions returned depends on the
+* the complexity of the PoW provided and and the current network complexity
+* (number of leading zero bits of the latest block). Peer sends
+* the SENDADDRDATA message in response to the GETADDRDATA message.
+*/
+inline constexpr const char* GETADDRDATA{"getaddrdata"};
+/**
+* Response to the GETADDRDATA message. Contains the requested transactions.
+*/
+inline constexpr const char* SENDADDRDATA{"sendaddrdata"};
 }; // namespace NetMsgType
 
 /** All known message types (see above). Keep this in the same order as the list of messages above. */
@@ -303,6 +327,9 @@ inline const std::array ALL_NET_MESSAGE_TYPES{std::to_array<std::string>({
     NetMsgType::CFCHECKPT,
     NetMsgType::WTXIDRELAY,
     NetMsgType::SENDTXRCNCL,
+    NetMsgType::SENDCHALLENGE,
+    NetMsgType::GETADDRDATA,
+    NetMsgType::SENDADDRDATA,
 })};
 
 /** nServices flags */
@@ -328,6 +355,9 @@ enum ServiceFlags : uint64_t {
 
     // NODE_P2P_V2 means the node supports BIP324 transport
     NODE_P2P_V2 = (1 << 11),
+
+    // node supports address index and SENDCHALLENGE/GETADDRDATA/SENDADDRDATA messages
+    NODE_ADDRINDEX = (1 << 25),
 
     // Bits 24-31 are reserved for temporary experiments. Just pick a bit that
     // isn't getting used, or one not being used much, and notify the
@@ -527,5 +557,88 @@ public:
 
 /** Convert a TX/WITNESS_TX/WTX CInv to a GenTxid. */
 GenTxid ToGenTxid(const CInv& inv);
+
+/** DoS protectino challenge */
+struct CChallenge
+{
+    SERIALIZE_METHODS(CChallenge, obj)
+    {
+        READWRITE(obj.m_required_complexity_2, obj.m_challenge);
+    }
+
+    uint8_t m_required_complexity_2;
+    uint64_t m_challenge;
+};
+
+/** Wallet data request */
+class CAddrRequest
+{
+public:
+    SERIALIZE_METHODS(CAddrRequest, obj)
+    {
+        READWRITE(obj.key_start, obj.transaction_start, obj.key_end, obj.nonce);
+    }
+
+    uint64_t key_start;
+    Txid transaction_start;
+    uint64_t key_end;
+    uint64_t nonce;
+};
+
+/** Merkle proof of a transaction */
+typedef std::vector<uint256> CTransactionProof;
+
+struct WalletTransaction {
+    /** Header of the block that contains the transaction */
+    CBlockHeader block_header;
+    int height;
+    uint256 chainWork;
+
+    /** Data of the transaction that relates to the query */
+    CTransaction tx;
+
+    /** Position of the transaction in the block */
+    uint32_t pos;
+
+    /** Merkle path of the transaction. Does not include the root, which is in the header. */
+    CTransactionProof proof;
+
+    SERIALIZE_METHODS(WalletTransaction, obj)
+    {
+        READWRITE(obj.block_header, obj.height, obj.chainWork, obj.tx, obj.pos, obj.proof);
+    }
+};
+
+class CAddrResponce
+{
+public:
+    std::vector<WalletTransaction> txs;
+    uint8_t eof = 0;
+
+    // if eof == 1, then the following fields specify the last block
+    // that was scanned for transactions
+    uint32_t lastBlockHeight;
+    uint256 lastBlockHash;
+
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        s << txs << eof;
+        if (eof) {
+            s << lastBlockHeight << lastBlockHash;
+        }
+    }
+
+    template <typename Stream>
+    void Unserialize(Stream& s)
+    {
+        s >> txs >> eof;
+        if (eof) {
+            s >> lastBlockHeight >> lastBlockHash;
+        }
+    }
+
+
+};
 
 #endif // BITCOIN_PROTOCOL_H

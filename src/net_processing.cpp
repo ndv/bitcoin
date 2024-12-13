@@ -6,15 +6,21 @@
 #include <net_processing.h>
 
 #include <addrman.h>
+#include <algorithm>
 #include <banman.h>
 #include <blockencodings.h>
 #include <blockfilter.h>
 #include <chainparams.h>
 #include <consensus/amount.h>
+#include <consensus/merkle.h>
 #include <consensus/validation.h>
+#include <compat/endian.h>
+#include <crypto/sha256.h>
 #include <deploymentstatus.h>
 #include <hash.h>
 #include <headerssync.h>
+#include <index/addrindex.h>
+#include <index/txindex.h>
 #include <index/blockfilterindex.h>
 #include <kernel/chain.h>
 #include <kernel/mempool_entry.h>
@@ -380,6 +386,17 @@ struct Peer {
     /** Time offset computed during the version handshake based on the
      * timestamp the peer sent in the version message. */
     std::atomic<std::chrono::seconds> m_time_offset{0s};
+
+    /**
+    * The random salt for the peer PoW.
+    */
+    uint64_t m_dos_challenge;
+
+    /**
+    * Pending address data request
+    */
+    Mutex m_addr_request_mutex;
+    std::unique_ptr<CAddrRequest> m_addr_request;
 
     explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound)
         : m_id{id}
@@ -1040,6 +1057,12 @@ private:
 
     void AddAddressKnown(Peer& peer, const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
     void PushAddress(Peer& peer, const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+
+    /** Return the wallet's data */
+    void ProcessGetAddrData(CNode& pfrom, Peer& peer, CAddrRequest& req);
+
+    /** generate a random challenge for DoS protection */
+    void PushChallenge(CNode& pfrom, Peer& peer);
 };
 
 const CNodeState* PeerManagerImpl::State(NodeId pnode) const
@@ -3280,6 +3303,173 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
     }
 }
 
+int GetHashComplexity(const uint256& hash)
+{
+    int complexity = 0;
+    const uint8_t* bytes = hash.data();
+    for (int i = 31; i >= 0; i--) {
+        if (bytes[i] == 0) {
+            complexity += 8;
+        } else {
+            for (int j = 7; j >= 0; j--) {
+                if ((bytes[i] & (1 << j)) == 0) {
+                    complexity++;
+                } else {
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    return complexity;
+}
+
+class AddrResponseWriter : public VectorWriter
+{
+    bool m_witness;
+
+public:
+    AddrResponseWriter(std::vector<unsigned char>& to, size_t size, bool witness) : VectorWriter(to, size), m_witness(witness) {}
+
+    template <typename T>
+    T GetParams()
+    {
+        return {};
+    }
+
+    template <typename T>
+    VectorWriter& operator<<(const T& obj)
+    {
+        ::Serialize(*this, obj);
+        return (*this);
+    }
+
+    template <>
+    TransactionSerParams GetParams<TransactionSerParams>()
+    {
+        return m_witness ? TX_WITH_WITNESS : TX_NO_WITNESS;
+    }
+};
+
+CSerializedNetMsg Serialize(Peer& peer, const CAddrResponce& resp)
+{
+    CSerializedNetMsg resp_msg;
+    resp_msg.m_type = NetMsgType::SENDADDRDATA;
+
+    AddrResponseWriter writer{resp_msg.data, 0, (peer.m_their_services & NODE_WITNESS) != 0};
+    writer << resp;
+
+    return resp_msg;
+}
+
+void PeerManagerImpl::ProcessGetAddrData(CNode& pfrom, Peer& peer, CAddrRequest& req)
+{
+    // get current complexity
+    int current_complexity = WITH_LOCK(m_most_recent_block_mutex, {
+        if (m_most_recent_block)
+            return GetHashComplexity(m_most_recent_block->GetHash());
+        if (m_chainman.m_best_header)
+            return GetHashComplexity(m_chainman.m_best_header->GetBlockHash());
+        return 76;
+    });
+
+    CSHA256 hasher;
+    DataStream ser;
+    ser << peer.m_dos_challenge << req;
+    hasher.Write((const uint8_t*)ser.data(), ser.size());
+
+    uint256 hash;
+    hasher.Finalize(hash.data());
+    // change byte order
+    for (int i = 0; i < 16; i++)
+        std::swap(hash.data()[i], hash.data()[31 - i]);
+
+    int request_complexity = GetHashComplexity(hash);
+
+    // *0.5 here is the assumption of the growth of the number of miners
+    double log_n_transactions = request_complexity - current_complexity * 0.5 + 18;
+
+    // authorize this number of transactions
+    int n_transactions = round(pow(2, log_n_transactions));
+
+    CAddrResponce resp;
+
+    LogInfo("request %d txs in response to %s", n_transactions, HexStr(ser));
+
+    if (n_transactions)
+    {
+        auto it = g_address_index->Iterator(req.key_start, req.transaction_start);
+        while (resp.txs.size() < n_transactions && it && it.GetKey() < req.key_end) {
+            uint256 block_hash;
+            CTransactionRef tx;
+            if (g_txindex->FindTx(it.GetValue(), block_hash, tx)) {
+
+                const CBlockIndex* pindex = WITH_LOCK(cs_main, return m_chainman.m_blockman.LookupBlockIndex(block_hash); );
+
+                if (pindex) {
+                    CBlock blk;
+                    if (m_chainman.m_blockman.ReadBlockFromDisk(blk, *pindex)) {
+                        uint32_t pos;
+                        // find the transaction in the block
+                        for (pos = 0; pos < blk.vtx.size(); pos++) {
+                            auto& tx = blk.vtx[pos];
+                            if (tx->GetHash() == it.GetValue()) {
+                                break;
+                            }
+                        }
+                        if (pos < blk.vtx.size()) {
+                            std::vector<uint256> proof = BlockMerkleBranch(blk, pos);
+                            resp.txs.emplace_back(blk, pindex->nHeight, ArithToUint256(pindex->nChainWork), *tx, pos, proof);
+                        } else {
+                            LogError("Can't find tx in addrindex: %s", it.GetValue().GetHex());
+                        }
+                    } else
+                        LogError("Can't read a block for addrindex: %s", pindex->GetBlockHash().GetHex());
+                } else
+                    LogError("Can't find a block for addrindex: %s", block_hash.GetHex());
+            } else {
+                LogError("Broken link in addrindex: %s", it.GetValue().GetHex());
+            }
+            it.Next();
+        }
+
+        resp.eof = !it || it.GetKey() >= req.key_end;
+
+        if (resp.eof) {
+            IndexSummary index_summary = g_address_index->GetSummary();
+            resp.lastBlockHeight = index_summary.best_block_height;
+            resp.lastBlockHash = index_summary.best_block_hash;
+        }
+    }
+
+    PushMessage(pfrom, Serialize(peer, resp));
+
+    // update he challenge for the next request
+    ser.clear();
+    hasher.Reset();
+    ser << "next challenge" << peer.m_dos_challenge << req;
+    hasher.Write((const uint8_t*)ser.data(), ser.size());
+    hasher.Finalize(hash.data());
+    peer.m_dos_challenge = ReadLE64(hash.data());
+}
+
+void PeerManagerImpl::PushChallenge(CNode& pfrom, Peer& peer)
+{
+    // get current complexity
+    uint8_t required_complexity_2 = WITH_LOCK(m_most_recent_block_mutex, {
+        uint256 block_hash;
+        if (m_chainman.m_best_header)
+            block_hash = m_chainman.m_best_header->GetBlockHash();
+        else if (m_most_recent_block)
+            block_hash = m_most_recent_block->GetHash();
+        else
+            return 76;
+        return GetHashComplexity(block_hash);
+    }) - 36;
+    GetStrongRandBytes(Span{(uint8_t*)&peer.m_dos_challenge, sizeof(peer.m_dos_challenge)});
+    MakeAndPushMessage(pfrom, NetMsgType::SENDCHALLENGE, required_complexity_2, peer.m_dos_challenge);
+}
+
 void PeerManagerImpl::ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)
 {
     std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
@@ -3454,6 +3644,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         // We send our version message in response.
         if (pfrom.IsInboundConn()) {
             PushNodeVersion(pfrom, *peer);
+            PushChallenge(pfrom, *peer);
         }
 
         // Change version
@@ -3783,6 +3974,17 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
     if (!pfrom.fSuccessfullyConnected) {
         LogDebug(BCLog::NET, "Unsupported message \"%s\" prior to verack from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
+        return;
+    }
+
+    // handle address index messages
+    if (msg_type == NetMsgType::SENDCHALLENGE) {
+        return;
+    }
+    if (msg_type == NetMsgType::GETADDRDATA && (peer->m_our_services & NODE_ADDRINDEX)) {
+        CAddrRequest req;
+        vRecv >> req;
+        ProcessGetAddrData(pfrom, *peer, req);
         return;
     }
 
@@ -4766,7 +4968,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
     }
 
     if (msg_type == NetMsgType::FILTERLOAD) {
-        if (!(peer->m_our_services & NODE_BLOOM)) {
+        if (!(peer->m_our_services & NODE_BLOOM) && !pfrom.addr.IsLocal()) {
             LogDebug(BCLog::NET, "filterload received despite not offering bloom services from peer=%d; disconnecting\n", pfrom.GetId());
             pfrom.fDisconnect = true;
             return;
@@ -5906,3 +6108,4 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
     MaybeSendFeefilter(*pto, *peer, current_time);
     return true;
 }
+

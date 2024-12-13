@@ -5,6 +5,7 @@
 #include <node/caches.h>
 
 #include <common/args.h>
+#include <index/addrindex.h>
 #include <index/txindex.h>
 #include <txdb.h>
 
@@ -16,8 +17,19 @@ CacheSizes CalculateCacheSizes(const ArgsManager& args, size_t n_indexes)
     CacheSizes sizes;
     sizes.block_tree_db = std::min(nTotalCache / 8, nMaxBlockDBCache << 20);
     nTotalCache -= sizes.block_tree_db;
-    sizes.tx_index = std::min(nTotalCache / 8, args.GetBoolArg("-txindex", DEFAULT_TXINDEX) ? nMaxTxIndexCache << 20 : 0);
-    nTotalCache -= sizes.tx_index;
+
+    bool addr_index = args.GetBoolArg("-addrindex", DEFAULT_ADDRINDEX);
+    bool tx_index = args.GetBoolArg("-txindex", DEFAULT_TXINDEX);
+
+    if (addr_index && tx_index) {
+        sizes.addr_index = std::min(nTotalCache / 6, nMaxAddrIndexCache << 20);
+        sizes.tx_index = std::min(nTotalCache / 12, nMaxTxIndexCache << 20);
+    } else {
+        sizes.addr_index = std::min(nTotalCache / 4, addr_index ? nMaxTxIndexCache << 20 : 0);
+        sizes.tx_index = std::min(nTotalCache / 8, tx_index ? nMaxTxIndexCache << 20 : 0);
+    }
+    nTotalCache -= sizes.addr_index + sizes.tx_index;
+
     sizes.filter_index = 0;
     if (n_indexes > 0) {
         int64_t max_cache = std::min(nTotalCache / 8, max_filter_index_cache << 20);
@@ -28,6 +40,7 @@ CacheSizes CalculateCacheSizes(const ArgsManager& args, size_t n_indexes)
     sizes.coins_db = std::min(sizes.coins_db, nMaxCoinsDBCache << 20); // cap total coins db cache
     nTotalCache -= sizes.coins_db;
     sizes.coins = nTotalCache; // the rest goes to in-memory cache
+
     return sizes;
 }
 } // namespace node

@@ -787,6 +787,7 @@ CNetMessage V1Transport::GetReceivedMessage(const std::chrono::microseconds time
 
     // store message type string, time, and sizes
     msg.m_type = hdr.GetMessageType();
+
     msg.m_time = time;
     msg.m_message_size = hdr.nMessageSize;
     msg.m_raw_message_size = hdr.nMessageSize + CMessageHeader::HEADER_SIZE;
