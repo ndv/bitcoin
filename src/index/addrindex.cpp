@@ -286,7 +286,7 @@ AddressIndexIterator::AddressIndexIterator(CDBIterator* dbit, uint64_t key, cons
         if (tx_from.IsNull()) {
             break;
         } else {
-            // skip to tx_prefix
+            // skip to tx_from
             for (m_pos = 0; m_pos < m_tx_ids.size(); m_pos++) {
                 if (tx_from == m_tx_ids[m_pos]) {
                     m_pos++;

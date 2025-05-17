@@ -1,3 +1,112 @@
+Address index
+=====================================
+
+The *address_index* branch added an address index for faster wallet sync. The index allows wallets to instantaneously 
+fetch the related transactions.
+
+Create
+------
+
+Pass the `--txindex` and `--addrindex` options to the bitcoind. This will start the index creation. You can check the progress in the logs.
+
+Query
+-----
+
+The index is available as the Bitcoin node service. Node supporting address index set the `NODE_ADDRINDEX = (1 << 25)` flag to the service flags.
+Because address fetch is a heavy operation, it is protected with simple PoW challenge. Three new message types are added:
+
+### `SENDCHALLENGE{"challenge"}`
+
+Sends a random 8-byte challenge to the peer to be used for DoS protection. A peer should not 
+assume that the node supports address indexes until it receives this message from the node.
+
+### `GETADDRDATA{"getaddrdata"}`
+
+A DoS-protected request for the peer to send the relevant transactions.
+Protection is based on PoW. The number of transactions returned depends on the
+the complexity of the PoW provided and and the current network complexity
+(number of leading zero bits of the latest block). Peer sends
+the SENDADDRDATA message in response to the GETADDRDATA message. The message format
+
+``` C++
+struct CAddrRequest
+{
+    uint64_t key_start;
+    Txid transaction_start;
+    uint64_t key_end;
+    uint64_t nonce;
+};
+```
+
+To keep requests anonymous, you should pass the range of the first 8 bytes of the address hash
+instead of the address itself, then choose the relevant addresses. The wider the range the harder 
+it is to narrow down the real address. The addresses searched are such that the first 8
+bytes (big endian) of the hash (publick key hash, or script hash, or a witness hash) are in the 
+range `[key_start; key_end)`. If `!transaction_start.IsNull()`, select transactions starting
+from the first transaction after `transaction_start`.
+
+### `SENDADDRDATA{"sendaddrdata"}`
+
+Response to the GETADDRDATA message. Contains the requested transactions along with the Merkle proofs.
+See protocol.h:
+
+``` C++
+/** Merkle proof of a transaction */
+typedef std::vector<uint256> CTransactionProof;
+
+struct WalletTransaction {
+    /** Header of the block that contains the transaction */
+    CBlockHeader block_header;
+    int height;
+    uint256 chainWork;
+
+    /** Data of the transaction that relates to the query */
+    CTransaction tx;
+
+    /** Position of the transaction in the block */
+    uint32_t pos;
+
+    /** Merkle path of the transaction. Does not include the root, which is in the header. */
+    CTransactionProof proof;
+
+    SERIALIZE_METHODS(WalletTransaction, obj)
+    {
+        READWRITE(obj.block_header, obj.height, obj.chainWork, obj.tx, obj.pos, obj.proof);
+    }
+};
+
+class CAddrResponce
+{
+public:
+    std::vector<WalletTransaction> txs;
+    uint8_t eof = 0;
+
+    // if eof == 1, then the following fields specify the last block
+    // that was scanned for transactions
+    uint32_t lastBlockHeight;
+    uint256 lastBlockHash;
+
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        s << txs << eof;
+        if (eof) {
+            s << lastBlockHeight << lastBlockHash;
+        }
+    }
+
+    template <typename Stream>
+    void Unserialize(Stream& s)
+    {
+        s >> txs >> eof;
+        if (eof) {
+            s >> lastBlockHeight >> lastBlockHash;
+        }
+    }
+};
+
+```
+
 Bitcoin Core integration/staging tree
 =====================================
 
