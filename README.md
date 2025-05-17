@@ -45,6 +45,17 @@ bytes (big endian) of the hash (publick key hash, or script hash, or a witness h
 range `[key_start; key_end)`. If `!transaction_start.IsNull()`, select transactions starting
 from the first transaction after `transaction_start`.
 
+The `nonce` field is generated such that sha256(challenge||addrRequest) is as small as possible.
+Here, `challenge` is the last challenge recieved from the node you are sending GETADDRDATA to.
+
+The smaller is the hash, the more records node returns per request.
+
+This challenge is updated every request:
+
+```
+next_challenge = sha256("next challenge"||prev_challenge)
+```
+
 ### `SENDADDRDATA{"sendaddrdata"}`
 
 Response to the GETADDRDATA message. Contains the requested transactions along with the Merkle proofs.
