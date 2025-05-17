@@ -3344,8 +3344,7 @@ public:
         return (*this);
     }
 
-    template <>
-    TransactionSerParams GetParams<TransactionSerParams>()
+    TransactionSerParams GetParams()
     {
         return m_witness ? TX_WITH_WITNESS : TX_NO_WITNESS;
     }
@@ -3390,7 +3389,7 @@ void PeerManagerImpl::ProcessGetAddrData(CNode& pfrom, Peer& peer, CAddrRequest&
     double log_n_transactions = request_complexity - current_complexity * 0.5 + 18;
 
     // authorize this number of transactions
-    int n_transactions = round(pow(2, log_n_transactions));
+    size_t n_transactions = round(pow(2, log_n_transactions));
 
     CAddrResponce resp;
 

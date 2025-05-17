@@ -46,13 +46,6 @@ BaseIndex::DB& AddressIndex::GetDB() const
     return *m_db;
 }
 
-// load a 64-bit big-endian integer
-static uint64_t Uint64BE(const uint8_t* data)
-{
-    return ((uint64_t)data[0] << 56) | ((uint64_t)data[1] << 48) | ((uint64_t)data[2] << 40) | ((uint64_t)data[3] << 32) |
-           ((uint64_t)data[4] << 24) | ((uint64_t)data[5] << 16) | ((uint64_t)data[6] << 8) | (uint64_t)data[7];
-}
-
 optional<AddressKey> AddressIndex::GetAddressKey(const CTxDestination& addr, uint8_t bin)
 {
     AddressKey key;
@@ -192,7 +185,7 @@ void AddressIndex::RewindBlock(const CBlock& block, const CBlockIndex* block_ind
     uint8_t bin_number = GetBinNumber(block_index->nHeight);
 
     // same as in CustomAppend, but in reverse order
-    for (size_t i = block.vtx.size() - 1; i >= 0; i--) {
+    for (int i = (int)block.vtx.size() - 1; i >= 0; i--) {
         const CTransactionRef& tx = block.vtx[i];
 
         std::set<CScript> scripts;
