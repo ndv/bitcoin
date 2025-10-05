@@ -55,8 +55,10 @@ The smaller is the hash, the more records node returns per request.
 This challenge is updated every request:
 
 ```
-next_challenge = sha256("next challenge"||prev_challenge)
+next_challenge = sha256("next challenge\0"||prev_challenge)
 ```
+
+Note that the 'next challenge' message is null-terminated.
 
 ### `SENDADDRDATA{"sendaddrdata"}`
 
