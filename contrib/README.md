@@ -18,6 +18,10 @@ A Linux bash script that will set up traffic control (tc) to limit the outgoing 
 ### [Seeds](/contrib/seeds) ###
 Utility to generate the pnSeed[] array that is compiled into the client.
 
+### [Address Index Client](/contrib/addrindex-client) ###
+Python client that acts like a Bitcoin node, retrieves the transaction related to an address, and computes balance and UTXO set, using the
+corresponding GETADDRDATA/SENDADDRDATA extension.
+
 Build Tools and Keys
 ---------------------
 

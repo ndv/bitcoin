@@ -125,6 +125,10 @@ public:
 The response data can contain data from other wallets. The requestor should choose relevant 
 transactions based on the transacion inputs and outputs. Transactions are returned chronologically.
 
+### Example ###
+
+See [Python client](/contrib/addrindex-client).
+
 Bitcoin Core integration/staging tree
 =====================================
 
