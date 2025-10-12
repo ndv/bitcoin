@@ -21,8 +21,8 @@ using namespace std;
 
 unique_ptr<AddressIndex> g_address_index;
 
-constexpr int first_bin_height = 677777;
-constexpr int bin_height_interval = 100000;
+constexpr int first_bin_height = 300000;
+constexpr int bin_height_interval = 20000;
 
 uint8_t GetBinNumber(int height)
 {
@@ -69,7 +69,7 @@ optional<AddressKey> AddressIndex::GetAddressKey(const CTxDestination& addr, uin
 
     if (data) {
         key.key = ReadBE64(data);
-        if (bin) key.bin = bin;
+        key.bin = bin;
         return key;
     } else {
         return nullopt;

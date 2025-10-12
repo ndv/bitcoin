@@ -20,20 +20,14 @@ struct AddressKey {
     template<typename Stream>
     void Serialize(Stream& s) const
     {
-        s << internal_bswap_64(key);
-        if (bin)
-            s << bin;
+        s << internal_bswap_64(key) << bin;
     }
 
     template<typename Stream>
     void Unserialize(Stream& s)
     {
-        s >> key;
+        s >> key >> bin;
         key = internal_bswap_64(key);
-        if (s.empty())
-            bin = 0;
-        else
-            s >> bin;
     }
     bool operator<(const AddressKey& other) const
     {
