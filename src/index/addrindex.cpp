@@ -265,68 +265,88 @@ optional<AddressIndex::AddressData> AddressIndex::Read(const AddressKey& key) co
     return std::nullopt;
 }
 
-AddressIndexIterator::AddressIndexIterator(CDBIterator* dbit, uint64_t key, const Txid& tx_from, uint8_t nbins)
-    : m_dbit(dbit), m_key(key), m_pos(0), m_nbins(nbins)
-{
-    AddressKey akey{key, 0};
+struct AddressDBIterator {
+    CDBIterator* m_dbit;
 
-    dbit->Seek(akey);
-    while (dbit->Valid()) {
-        dbit->GetKey(akey);
-        m_key = akey.key;
-        dbit->GetValue(m_tx_ids);
-        if (m_key != key) break;
-        if (tx_from.IsNull()) {
-            break;
-        } else {
-            // skip to tx_from
-            for (m_pos = 0; m_pos < m_tx_ids.size(); m_pos++) {
-                if (tx_from == m_tx_ids[m_pos]) {
-                    m_pos++;
-                    return;
-                }
-            }
+    // fetched data
+    AddressKey m_key;
+    std::vector<Txid> m_tx_ids;
+
+    AddressDBIterator(CDBIterator* dbit, uint64_t key) : m_dbit(dbit), m_key(key)
+    {
+        AddressKey akey{key, 0};
+
+        dbit->Seek(akey);
+        if (dbit->Valid()) {
+            dbit->GetKey(akey);
+            m_key = akey;
+            dbit->GetValue(m_tx_ids);
         }
-        dbit->Next();
-        m_pos = 0;
     }
-}
 
-AddressIndexIterator::operator bool() const
-{
-    return m_dbit->Valid();
-}
+    ~AddressDBIterator()
+    {
+        delete m_dbit;
+    }
 
-uint64_t AddressIndexIterator::GetKey()
-{
-    return m_key;
-}
+    operator bool() const
+    {
+        return m_dbit->Valid();
+    }
 
-Txid& AddressIndexIterator::GetValue()
-{
-    return m_tx_ids[m_pos];
-}
+    AddressKey GetKey()
+    {
+        return m_key;
+    }
 
-void AddressIndexIterator::Next()
-{
-    if (m_pos < m_tx_ids.size() - 1) {
-        m_pos++;
-    } else {
+    std::vector<Txid>* GetValue()
+    {
+        return &m_tx_ids;
+    }
+
+    void Next()
+    {
         m_dbit->Next();
         if (m_dbit->Valid()) {
             AddressKey akey;
             m_dbit->GetKey(akey);
-            m_key = akey.key;
+            m_key = akey;
             m_dbit->GetValue(m_tx_ids);
-            m_pos = 0;
         }
     }
-}
+};
 
-AddressIndexIterator::~AddressIndexIterator()
-{
-    delete m_dbit;
-}
+struct AddressCacheIterator {
+    using MapType = std::map<AddressKey, AddressIndex::AddressData>;
+    std::map<AddressKey, AddressIndex::AddressData> m_cache;
+    MapType::iterator m_it;
+
+    AddressCacheIterator(std::map<AddressKey, AddressIndex::AddressData> cache, uint64_t key)
+        : m_cache(std::move(cache))
+    {
+        m_it = m_cache.find(AddressKey{key, 0});
+    }
+
+    operator bool() const
+    {
+        return m_it != m_cache.end();
+    }
+
+    AddressKey GetKey()
+    {
+        return m_it->first;
+    }
+
+    std::vector<Txid>* GetValue()
+    {
+        return &m_it->second;
+    }
+
+    void Next()
+    {
+        m_it++;
+    }
+};
 
 int AddressIndex::GetNBins() const
 {
@@ -335,7 +355,67 @@ int AddressIndex::GetNBins() const
     return (sum.best_block_height - first_bin_height) / bin_height_interval + 1;
 }
 
-AddressIndexIterator AddressIndex::Iterator(uint64_t key, const Txid& tx) const
+
+// merge db and cache data
+
+AddressIndexIterator::operator bool() const
 {
-    return AddressIndexIterator(m_db->NewIterator(), key, tx, GetNBins());
+    if (m_pos < m_current_data->size())
+        return true;
+    else
+        return
+            *static_cast<AddressDBIterator*>(m_db_iterator) ||
+            *static_cast<AddressCacheIterator*>(m_cache_iterator);
+}
+
+uint64_t AddressIndexIterator::GetKey()
+{
+    return m_current_key.key;
+}
+
+Txid& AddressIndexIterator::GetValue()
+{
+    return (*m_current_data)[m_pos++];
+}
+
+void AddressIndexIterator::Next()
+{
+    if (m_current_data && m_pos < m_current_data->size()) {
+        m_pos++;
+        return;
+    }
+
+    m_pos = 0;
+    AddressDBIterator* dbit = static_cast<AddressDBIterator*>(m_db_iterator);
+    AddressCacheIterator* chit = static_cast<AddressCacheIterator*>(m_cache_iterator);
+
+    if (!*chit || *dbit && dbit->GetKey() <= chit->GetKey()) {
+        m_current_key = dbit->GetKey();
+        m_current_data = dbit->GetValue();
+        dbit->Next();
+    } else {
+        m_current_key = chit->GetKey();
+        m_current_data = chit->GetValue();
+        chit->Next();
+    }
+}
+
+AddressIndexIterator::~AddressIndexIterator()
+{
+    delete static_cast<AddressDBIterator*>(m_db_iterator);
+    delete static_cast<AddressCacheIterator*>(m_cache_iterator);
+}
+
+AddressIndexIterator AddressIndex::Iterator(uint64_t key)
+{
+    AddressIndexIterator it;
+    it.m_db_iterator = new AddressDBIterator(m_db->NewIterator(), key);
+    {
+        lock_guard<recursive_mutex> l(m_mutex);
+        it.m_cache_iterator = new AddressCacheIterator(m_accumulated_changes, key);
+    }
+
+    it.Next();
+
+    return it;
 }

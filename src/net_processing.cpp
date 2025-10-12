@@ -3397,7 +3397,13 @@ void PeerManagerImpl::ProcessGetAddrData(CNode& pfrom, Peer& peer, CAddrRequest&
 
     if (n_transactions)
     {
-        auto it = g_address_index->Iterator(req.key_start, req.transaction_start);
+        auto it = g_address_index->Iterator(req.key_start);
+        if (!req.transaction_start.IsNull()) {
+            // skip the transaction
+            while (it && it.GetKey() < req.key_end && it.GetValue() != req.transaction_start) {
+                it.Next();
+            }
+        }
         while (resp.txs.size() < n_transactions && it && it.GetKey() < req.key_end) {
             uint256 block_hash;
             CTransactionRef tx;

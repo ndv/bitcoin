@@ -54,21 +54,17 @@ struct AddressKey {
 };
 
 struct AddressIndexIterator {
-    CDBIterator* m_dbit;
-    uint64_t m_key;
-    std::vector<Txid> m_tx_ids;
-    uint32_t m_pos;
-    uint8_t m_nbins;
-
-    AddressIndexIterator(CDBIterator* dbit, uint64_t key, const Txid& tx_from, uint8_t nbins);
-    ~AddressIndexIterator();
-
     operator bool() const;
-
     uint64_t GetKey();
     Txid& GetValue();
-
     void Next();
+    ~AddressIndexIterator();
+
+    void* m_db_iterator;
+    void* m_cache_iterator;
+    AddressKey m_current_key;
+    std::vector<Txid>* m_current_data = nullptr;
+    uint32_t m_pos = 0;
 };
 
 /**
@@ -87,7 +83,7 @@ public:
         std::unique_ptr<interfaces::Chain> chain,
         size_t n_cache_size, bool f_memory = false, bool f_wipe = false);
 
-    AddressIndexIterator Iterator(uint64_t key, const Txid& tx) const;
+    AddressIndexIterator Iterator(uint64_t key);
 
 protected:
 
