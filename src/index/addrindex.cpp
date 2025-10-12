@@ -388,13 +388,17 @@ void AddressIndexIterator::Next()
     AddressCacheIterator* chit = static_cast<AddressCacheIterator*>(m_cache_iterator);
 
     if (!*chit || (*dbit && dbit->GetKey() <= chit->GetKey())) {
-        m_current_key = dbit->GetKey();
-        m_current_data = dbit->GetValue();
         dbit->Next();
+        if (*dbit) {
+            m_current_key = dbit->GetKey();
+            m_current_data = dbit->GetValue();
+        }
     } else {
-        m_current_key = chit->GetKey();
-        m_current_data = chit->GetValue();
         chit->Next();
+        if (*chit) {
+            m_current_key = chit->GetKey();
+            m_current_data = chit->GetValue();
+        }
     }
 }
 
@@ -406,15 +410,24 @@ AddressIndexIterator::~AddressIndexIterator()
 
 AddressIndexIterator AddressIndex::Iterator(uint64_t key)
 {
+    AddressDBIterator* dbit = new AddressDBIterator(m_db->NewIterator(), key);
+    AddressCacheIterator* chit;
+
     AddressIndexIterator it;
-    it.m_db_iterator = new AddressDBIterator(m_db->NewIterator(), key);
+    it.m_db_iterator = dbit;
     {
         lock_guard<recursive_mutex> l(m_mutex);
-        it.m_cache_iterator = new AddressCacheIterator(m_accumulated_changes, key);
+        chit = new AddressCacheIterator(m_accumulated_changes, key);
+        it.m_cache_iterator = chit;
     }
 
-    if (it)
-        it.Next();
+    if (*dbit) {
+        it.m_current_key = dbit->GetKey();
+        it.m_current_data = dbit->GetValue();
+    } else if (*chit) {
+        it.m_current_key = chit->GetKey();
+        it.m_current_data = chit->GetValue();
+    }
 
     return it;
 }
