@@ -272,14 +272,12 @@ struct AddressDBIterator {
     AddressKey m_key;
     std::vector<Txid> m_tx_ids;
 
-    AddressDBIterator(CDBIterator* dbit, uint64_t key) : m_dbit(dbit), m_key(key)
+    AddressDBIterator(CDBIterator* dbit, uint64_t key) : m_dbit(dbit), m_key{key, 0}
     {
-        AddressKey akey{key, 0};
-
-        dbit->Seek(akey);
+        dbit->Seek(m_key);
         if (dbit->Valid()) {
-            dbit->GetKey(akey);
-            m_key = akey;
+            dbit->GetKey(m_key);
+            m_key = m_key;
             dbit->GetValue(m_tx_ids);
         }
     }
@@ -389,7 +387,7 @@ void AddressIndexIterator::Next()
     AddressDBIterator* dbit = static_cast<AddressDBIterator*>(m_db_iterator);
     AddressCacheIterator* chit = static_cast<AddressCacheIterator*>(m_cache_iterator);
 
-    if (!*chit || *dbit && dbit->GetKey() <= chit->GetKey()) {
+    if (!*chit || (*dbit && dbit->GetKey() <= chit->GetKey())) {
         m_current_key = dbit->GetKey();
         m_current_data = dbit->GetValue();
         dbit->Next();
