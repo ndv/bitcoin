@@ -324,7 +324,7 @@ struct AddressCacheIterator {
     AddressCacheIterator(std::map<AddressKey, AddressIndex::AddressData> cache, uint64_t key)
         : m_cache(std::move(cache))
     {
-        m_it = m_cache.find(AddressKey{key, 0});
+        m_it = m_cache.lower_bound(AddressKey{key, 0});
     }
 
     operator bool() const
@@ -380,7 +380,7 @@ Txid& AddressIndexIterator::GetValue()
 
 void AddressIndexIterator::Next()
 {
-    if (m_current_data && m_pos < m_current_data->size()) {
+    if (m_pos < m_current_data->size()) {
         m_pos++;
         return;
     }
@@ -415,7 +415,8 @@ AddressIndexIterator AddressIndex::Iterator(uint64_t key)
         it.m_cache_iterator = new AddressCacheIterator(m_accumulated_changes, key);
     }
 
-    it.Next();
+    if (it)
+        it.Next();
 
     return it;
 }
