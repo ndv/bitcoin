@@ -57,7 +57,7 @@ struct AddressIndexIterator {
     void* m_db_iterator;
     void* m_cache_iterator;
     AddressKey m_current_key;
-    std::vector<Txid>* m_current_data = nullptr;
+    std::vector<Txid> m_current_data;
     uint32_t m_pos = 0;
 };
 
