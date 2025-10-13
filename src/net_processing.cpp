@@ -3403,6 +3403,7 @@ void PeerManagerImpl::ProcessGetAddrData(CNode& pfrom, Peer& peer, CAddrRequest&
             while (it && it.GetKey() < req.key_end && it.GetValue() != req.transaction_start) {
                 it.Next();
             }
+            if (it) it.Next();
         }
         while (resp.txs.size() < n_transactions && it && it.GetKey() < req.key_end) {
             uint256 block_hash;
