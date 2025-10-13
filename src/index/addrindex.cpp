@@ -386,7 +386,7 @@ void AddressIndexIterator::Next()
     AddressDBIterator* dbit = static_cast<AddressDBIterator*>(m_db_iterator);
     AddressCacheIterator* chit = static_cast<AddressCacheIterator*>(m_cache_iterator);
 
-    if (!*chit || dbit->GetKey() <= chit->GetKey()) {
+    if (!*chit || dbit->GetKey() < chit->GetKey()) {
         m_current_key = dbit->GetKey();
         m_current_data = dbit->GetValue();
         dbit->Next();
