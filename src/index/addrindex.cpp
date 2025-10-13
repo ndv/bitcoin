@@ -377,8 +377,8 @@ Txid& AddressIndexIterator::GetValue()
 
 void AddressIndexIterator::Next()
 {
+    m_pos++;
     if (m_pos < m_current_data.size()) {
-        m_pos++;
         return;
     }
 
